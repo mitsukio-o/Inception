@@ -8,6 +8,7 @@ services:
     networks:
       - inception
     restart: always
+    image: mariadb:inception
 
   wordpress:
     build: ./requirements/wordpress
@@ -19,6 +20,7 @@ services:
       - inception
     depends_on:
       - mariadb
+    image: wordpress:inception
 
 
     restart: always
@@ -37,6 +39,7 @@ services:
     depends_on:
       - wordpress
     restart: always
+    image: nginx:inception
 
 networks:
   inception:
