@@ -7,7 +7,7 @@ chown mysql:mysql /run/mysqld
 if [ ! -d "/var/lib/mysql/mysql" ]; then
     echo "[init] first run: initializing database"
     #set where to initialize
-    mysql_install_db --user=mysql --datadir=/var/lib/mysql
+    mysql_install_db --user=mysql --datadir=/var/lib/mysql --skip-test-db
     mysqld --user=mysql --bootstrap << EOF
 
 #DB initialization and root user setting

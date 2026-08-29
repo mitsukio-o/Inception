@@ -16,7 +16,7 @@ if [ ! -f "wp-config.php" ]; then
     sed -i "s/database_name_here/${MYSQL_DATABASE}/" wp-config.php
     sed -i "s/username_here/${MYSQL_USER}/" wp-config.php
     sed -i "s/password_here/${MYSQL_PASSWORD}/" wp-config.php
-    sed -i "s/localhost/${MYSQL_HOST}/" wp-config.php
+    sed -i "s/localhost/${DB_HOST}/" wp-config.php
     chown -R www-data:www-data /var/www/html
 else
     echo "[init] existing wordpress found"
