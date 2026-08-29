@@ -23,8 +23,9 @@ else
 fi
 
 # -h means hostname
-while ! mysqladmin ping -h mariadb --silent; do
-    echo "waiting for mariadb"
+for i in $(seq 1 60); do
+    mysqladmin ping -h ${DB_HOST} --silent && break
+    echo "waiting for mariadb ($i/60)"
     sleep 2
 done
 

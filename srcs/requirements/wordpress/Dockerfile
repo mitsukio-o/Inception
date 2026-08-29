@@ -1,6 +1,6 @@
 FROM debian:bookworm
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends php-fpm php-mysql curl mariadb-client  ca-certificates && \
+    apt-get install -y --no-install-recommends php-fpm php-mysql curl mariadb-client  ca-certificates php-gd php-mbstring php-xml php-zip && \
     rm -rf /var/lib/apt/lists/*
 COPY conf/www.conf   /etc/php/8.2/fpm/pool.d/www.conf
 COPY tools/init.sh   /usr/local/bin/init.sh
