@@ -17,6 +17,11 @@ if [ ! -f "wp-config.php" ]; then
     sed -i "s/username_here/${MYSQL_USER}/" wp-config.php
     sed -i "s/password_here/${MYSQL_PASSWORD}/" wp-config.php
     sed -i "s/localhost/${DB_HOST}/" wp-config.php
+    for key in AUTH_KEY SECURE_AUTH_KEY LOGGED_IN_KEY NONCE_KEY \
+               AUTH_SALT SECURE_AUTH_SALT LOGGED_IN_SALT NONCE_SALT; do
+        salt=$(head -c 64 /dev/urandom | base64 | tr -d '\n/+=|&' | head -c 64)
+        sed -i "s|define( '${key}',.*|define( '${key}', '${salt}' );|" wp-config.php
+    done
     chown -R www-data:www-data /var/www/html
 else
     echo "[init] existing wordpress found"
