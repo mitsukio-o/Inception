@@ -156,6 +156,144 @@ docker exec -it mariadb mariadb -u<MYSQL_USER> -p <MYSQL_DATABASE> \
   -e "UPDATE wp_options SET option_value='https://new.domain' WHERE option_name IN ('siteurl','home');"
 ```
 
+### 3.5 Changing a port
+
+Every port in the stack has a process that *listens* on it and something that
+*connects* to it, and both sides live in different files. Changing one side only
+is the single most common way to break the stack, so the tables below list every
+file a given port appears in.
+
+`EXPOSE` never changes behaviour — it only records the port in the image
+metadata, which is what `docker ps` reports in its `PORTS` column. It is listed
+anyway, because leaving it stale makes `docker ps` lie.
+
+**The published HTTPS port.** The only port that exists outside the machine.
+
+| File                      | Change                       |
+| ------------------------- | ---------------------------- |
+| `srcs/docker-compose.yml` | `ports: - "8443:443"`        |
+
+The left number is the host, the right number is the port inside the container.
+NGINX keeps listening on 443, so nothing else moves.
+
+```bash
+make re
+curl -kI https://kmitsuki.42.fr:8443
+```
+
+**The port NGINX listens on.** Now the right-hand side of `ports:` has to follow,
+because that number is the one inside the container.
+
+| File                                      | Change                 |
+| ----------------------------------------- | ---------------------- |
+| `srcs/requirements/nginx/conf/nginx.conf` | `listen 8443 ssl;`     |
+| `srcs/requirements/nginx/Dockerfile`      | `EXPOSE 8443`          |
+| `srcs/docker-compose.yml`                 | `ports: - "8443:8443"` |
+
+**The FastCGI port.** PHP-FPM listens, NGINX connects.
+
+| File                                          | Change                        |
+| --------------------------------------------- | ----------------------------- |
+| `srcs/requirements/wordpress/conf/www.conf`   | `listen = 9001`               |
+| `srcs/requirements/nginx/conf/nginx.conf`     | `fastcgi_pass wordpress:9001;`|
+| `srcs/requirements/wordpress/Dockerfile`      | `EXPOSE 9001`                 |
+
+Changing only one of the first two gives a very specific symptom: static files
+still load, every PHP request returns `502 Bad Gateway`, and `docker logs nginx`
+shows `connect() failed ... upstream: fastcgi://<ip>:<old port>`. That message
+names the side that was not updated.
+
+This port is internal to the bridge network and is never published, so nothing
+outside the stack is affected by the change.
+
+**The database port.** This is the only one that also reaches a file stored on a
+volume, so a rebuild alone is not enough.
+
+| File                                              | Change                             |
+| -------------------------------------------------- | ---------------------------------- |
+| `srcs/requirements/mariadb/conf/50-server.cnf`    | `port = 3307` under `[mysqld]`     |
+| `srcs/.env`                                       | `DB_PORT=3307`                     |
+| `srcs/requirements/wordpress/tools/init.sh`       | see below                          |
+| `srcs/requirements/mariadb/Dockerfile`            | `EXPOSE 3307`                      |
+
+`DB_HOST` is used in two different ways, and they do not accept the same syntax:
+
+```sh
+sed -i "s/localhost/${DB_HOST}/" wp-config.php        # WordPress: accepts host:port
+mysqladmin ping -h ${DB_HOST} --silent                # mysqladmin: -h is a host only
+```
+
+So the port cannot simply be appended to `DB_HOST`. Add a separate `DB_PORT` and
+use it on both lines:
+
+```sh
+sed -i "s/localhost/${DB_HOST}:${DB_PORT}/" wp-config.php
+mysqladmin ping -h "${DB_HOST}" -P "${DB_PORT}" --silent
+```
+
+If only the server side is changed, the stack still comes up — `mysqladmin`
+fails, the loop runs its full 60 iterations, and php-fpm starts about two
+minutes later serving `Error establishing a database connection`. A slow start
+followed by that page is the signature of a half-finished port change.
+
+There is one more catch. `init.sh` writes `wp-config.php` only when the file does
+not exist, so on a volume that already holds a site the new value is never
+written. Either edit the existing file in place:
+
+```bash
+docker exec wordpress sed -i \
+  "s/'DB_HOST', *'[^']*'/'DB_HOST', 'mariadb:3307'/" /var/www/html/wp-config.php
+docker restart wordpress
+```
+
+or start from an empty data directory, which destroys the site:
+
+```bash
+make clean && sudo rm -rf /home/kmitsuki/data/* && make
+```
+
+**Picking a number.** Anything from 1024 to 65535 that is free on the machine
+works; `sudo ss -tlnp` lists what is already taken. Three numbers are special:
+`22` carries the SSH session and taking it over ends the connection, `80` must
+stay closed because the infrastructure is HTTPS-only, and the ports already in
+use inside the stack (443, 9000, 3306) collide with themselves. Ports below 1024
+need root, which the containers happen to have, so they work — 443 is one — but
+they are worth avoiding otherwise.
+
+Note that the three network layers are independent: a port used by the host
+machine, by the virtual machine, and inside a container are unrelated even when
+the number is the same. Only the left-hand side of `ports:` competes with other
+programs on the virtual machine.
+
+### 3.6 Changing other configuration values
+
+| To change                       | Edit                                                | Then                              |
+| ------------------------------- | --------------------------------------------------- | --------------------------------- |
+| accepted TLS versions           | `ssl_protocols` in `nginx.conf`                     | `make re`                         |
+| the certificate subject         | the `-subj` argument in `nginx/Dockerfile`          | `make re`                         |
+| PHP upload size, memory limit   | `php_admin_value[...]` lines in `www.conf`          | `make re`                         |
+| the number of PHP workers       | `pm.*` directives in `www.conf`                     | `make re`                         |
+| MariaDB tuning, character set   | `50-server.cnf`                                     | `make re`                         |
+| the domain name                 | four places — see §3.4                              | `make re`                         |
+| database name, user, password   | `srcs/.env`                                         | empty data directory, then `make` |
+| where the data is stored        | `device:` in `docker-compose.yml`, `mkdir` in the `Makefile` | `make re`                |
+| the site title, users, plugins  | the WordPress dashboard                             | nothing                           |
+
+The line in that table that catches people is the credentials one. `.env` is read
+when the *volume* is provisioned, not when the container starts, so editing a
+password on a stack that already has data changes nothing — the database keeps
+the account it was created with. Change it in MariaDB instead, or reprovision.
+
+A PHP setting is added to the pool file rather than to a new `php.ini`, because
+`www.conf` is already copied into the image:
+
+```ini
+php_admin_value[upload_max_filesize] = 64M
+php_admin_value[post_max_size] = 64M
+php_admin_value[memory_limit] = 512M
+```
+
+
 ## 4. Building and launching
 
 ```bash
@@ -219,6 +357,49 @@ docker exec nginx sh -c 'tr "\0" " " < /proc/1/cmdline' # PID 1 is the daemon it
   make clean && sudo rm -rf /home/kmitsuki/data/* && make
   ```
   This destroys the site. `make fclean` deliberately does **not** do it.
+
+### Confirming that a change took effect
+
+Work outwards, in this order. Each step tells you which of the previous ones is
+at fault.
+
+**1. Did the edited file reach the image?**
+
+```bash
+docker exec nginx     grep fastcgi_pass /etc/nginx/nginx.conf
+docker exec wordpress grep '^listen'    /etc/php/8.2/fpm/pool.d/www.conf
+docker exec mariadb   grep -E '^port|^bind-address' /etc/mysql/mariadb.conf.d/50-server.cnf
+```
+
+If the old value is still there, the image was not rebuilt. Files under `conf/`
+are copied in by `COPY` at build time, so `docker compose restart` — and
+`docker compose up -d` without `--build` — keep serving the previous copy.
+`make re` rebuilds.
+
+**2. Is the process actually reachable on the new port?**
+
+Ask the container that will do the connecting, which needs no extra package —
+`bash` opens a TCP connection through `/dev/tcp`:
+
+```bash
+docker exec nginx     bash -c 'exec 3<>/dev/tcp/wordpress/9000 && echo reachable'
+docker exec wordpress bash -c 'exec 3<>/dev/tcp/mariadb/3306   && echo reachable'
+```
+
+Anything other than `reachable` means the daemon is not listening there. If
+`iproute2` is installed in the image, `docker exec <service> ss -tlnp` shows the
+same thing as a list.
+
+**3. Does the whole path work?**
+
+```bash
+curl -kI https://kmitsuki.42.fr
+#   HTTP/1.1 200 OK
+```
+
+`502 Bad Gateway` here with both checks above passing means NGINX and PHP-FPM
+disagree about the port. `docker logs nginx` prints the address it tried.
+
 
 ## 6. Where the data lives, and why it persists
 
