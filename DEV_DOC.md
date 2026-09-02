@@ -152,7 +152,7 @@ After changing the domain, the site URL stored in the database must be updated
 too, or the browser will be redirected to the old one:
 
 ```bash
-docker exec -it mariadb mariadb -uwpuser -p wordpress \
+docker exec -it mariadb mariadb -u<MYSQL_USER> -p <MYSQL_DATABASE> \
   -e "UPDATE wp_options SET option_value='https://new.domain' WHERE option_name IN ('siteurl','home');"
 ```
 
@@ -286,6 +286,13 @@ anonymous accounts `''@'localhost'` and `''@'<hostname>'` and a `test` database.
 Anonymous accounts are matched before named ones for the same host, so their
 presence is what would let `mariadb -u root` succeed **with no password**.
 
+The WordPress account is created as `'<MYSQL_USER>'@'%'`, not `@'localhost'`.
+WordPress runs in a separate container, so it arrives over TCP from another
+address on the `srcs_inception` bridge; a `localhost` grant — which MariaDB
+matches only for the unix socket and `127.0.0.1` — would never apply to it.
+`root` keeps `@'localhost'` for the opposite reason: it should be usable only
+from inside the database container, never over the network.
+
 `bind-address = 0.0.0.0` looks permissive but is not: the container has exactly
 one network interface, on the private `srcs_inception` bridge, and the service
 publishes no port. The boundary is the network namespace, not the bind address.
@@ -352,9 +359,10 @@ signing keys for login cookies and nonces would be a publicly known constant:
 salt=$(head -c 64 /dev/urandom | base64 | tr -d '\n/+=|&' | head -c 64)
 ```
 
-`tr` removes exactly the characters that would otherwise break the `sed`
-replacement (`&`), its `|` delimiter, and the surrounding PHP string — leaving
-an alphanumeric value that is always safe to substitute.
+base64 emits `A-Za-z0-9+/=`; `tr` strips `+`, `/` and `=` from that alphabet,
+plus `|` and `&` as a guard — the delimiter used in the `sed` command, and the
+one character `sed` expands inside a replacement. What is left is alphanumeric,
+so it is always safe to substitute.
 
 The wait loop is bounded on purpose:
 

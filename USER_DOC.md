@@ -75,7 +75,7 @@ Two WordPress accounts exist:
 | Account    | Role          | Can do                                              |
 | ---------- | ------------- | --------------------------------------------------- |
 | `kmitsuki` | administrator | everything: pages, themes, plugins, users, settings |
-| `guest`    | author        | write and publish their own posts, leave comments   |
+| `user2`    | author        | write and publish their own posts, leave comments   |
 
 ## 4. Where the credentials are
 
@@ -127,8 +127,10 @@ WordPress directly.
 ### Quick health check
 
 ```bash
-make ps                 # the three containers should all be "Up"
-make logs               # follow the logs of all three
+COMPOSE="docker compose -f srcs/docker-compose.yml"
+
+$COMPOSE ps             # the three containers should all be "Up"
+$COMPOSE logs -f        # follow the logs of all three
 docker logs wordpress   # or just one
 ```
 
@@ -202,6 +204,13 @@ docker volume inspect srcs_wordpress_data --format '{{.Options.device}}'
 #   /home/kmitsuki/data/wordpress
 ```
 
+**Each image contains only its own service**
+
+```bash
+grep -i nginx srcs/requirements/mariadb/Dockerfile
+#   (no output)          <- the database image installs mariadb-server and nothing else
+```
+
 **MariaDB refuses `root` without a password, and accepts it with one**
 
 ```bash
@@ -215,18 +224,29 @@ docker exec -it mariadb mariadb -uroot -p
 **The WordPress database account works and the database is not empty**
 
 ```bash
-docker exec -it mariadb mariadb -uwpuser -p wordpress -e "SHOW TABLES;"
+docker exec -it mariadb sh -c \
+  'mariadb -u"$MYSQL_USER" -p "$MYSQL_DATABASE" -e "SHOW TABLES;"'
 #   wp_commentmeta, wp_comments, wp_options, wp_posts, wp_users ... (12 tables)
 ```
 
 **Two WordPress users exist and the administrator is not called "admin"**
 
 ```bash
-docker exec -it mariadb mariadb -uwpuser -p wordpress \
-  -e "SELECT ID, user_login FROM wp_users;"
+docker exec -it mariadb sh -c \
+  'mariadb -u"$MYSQL_USER" -p "$MYSQL_DATABASE" -e "SELECT ID, user_login FROM wp_users;"'
 #   1  kmitsuki
-#   2  guest
+#   2  user2
 ```
+
+> **What these three checks mean.** The `root` password is the
+> `MYSQL_ROOT_PASSWORD` from `srcs/.env`. The WordPress account is created as
+> `'<MYSQL_USER>'@'%'` rather than `@'localhost'`, because it connects from a
+> *different container* — that is a TCP connection from another address on the
+> `srcs_inception` bridge, so a `localhost` grant would never match it.
+> `mysql_install_db` is run with `--skip-test-db`, so no anonymous account and
+> no `test` database are created; anonymous accounts are matched before named
+> ones for the same host, and their absence is what makes the first command
+> above fail as it should.
 
 **Each container runs its own daemon as PID 1**
 
