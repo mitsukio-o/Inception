@@ -61,13 +61,35 @@ cp srcs/.env.example srcs/.env
 $EDITOR srcs/.env
 ```
 
-| Variable              | Used by            | Meaning                                        |
-| --------------------- | ------------------ | ---------------------------------------------- |
-| `MYSQL_DATABASE`      | mariadb, wordpress | the database WordPress uses                    |
-| `MYSQL_USER`          | mariadb, wordpress | the account WordPress connects with            |
-| `MYSQL_PASSWORD`      | mariadb, wordpress | that account's password                        |
-| `MYSQL_ROOT_PASSWORD` | mariadb            | the MariaDB `root` password                    |
-| `DB_HOST`             | wordpress          | hostname of the database container (`mariadb`) |
+| Variable              | Used by            | Meaning                                          |
+| --------------------- | ------------------ | ------------------------------------------------ |
+| `MYSQL_DATABASE`      | mariadb, wordpress | the database WordPress uses                      |
+| `MYSQL_USER`          | mariadb, wordpress | the account WordPress connects with               |
+| `MYSQL_PASSWORD`      | mariadb, wordpress | that account's password                          |
+| `MYSQL_ROOT_PASSWORD` | mariadb            | the MariaDB `root` password                      |
+| `DB_HOST`             | wordpress          | hostname of the database container (`mariadb`)   |
+| `DB_PORT`             | wordpress          | the port mysqld listens on                       |
+| `DOMAIN_NAME`         | wordpress          | the site address the installer stores in the database |
+| `WP_TITLE`            | wordpress          | the site title                                   |
+| `WP_ADMIN_USER`       | wordpress          | the administrator login                          |
+| `WP_ADMIN_PASSWORD`   | wordpress          | the administrator password                       |
+| `WP_ADMIN_EMAIL`      | wordpress          | the administrator email address                  |
+| `WP_USER`             | wordpress          | the second, non-administrator account            |
+| `WP_USER_PASSWORD`    | wordpress          | that account's password                          |
+| `WP_USER_EMAIL`       | wordpress          | that account's email address                     |
+
+> **`WP_ADMIN_USER` must not contain `admin` in any casing.** The subject
+> forbids it, and it is checked. `administrator`, `Admin-kmitsuki` and
+> `admin123` are all rejected; the login used elsewhere in the project is not.
+
+> **`DOMAIN_NAME` is not the only place the domain appears.** It is what the
+> installer writes into `wp_options`, so it has to agree with `server_name` in
+> `nginx.conf` and with the certificate `CN`; §3.4 lists all of them.
+
+> **`DB_PORT` must agree with `port` in
+> `srcs/requirements/mariadb/conf/50-server.cnf`.** It is the client half of
+> the same number: `wp-config.php` receives `DB_HOST:DB_PORT`, and the wait
+> loop passes it to `mysqladmin` as `-P`.
 
 > **The database host variable must not be called `MYSQL_HOST`.**
 > `MYSQL_HOST` is read by the MariaDB *client* as its default host. `env_file:`
@@ -113,26 +135,46 @@ echo "127.0.0.1 kmitsuki.42.fr" | sudo tee -a /etc/hosts
 make
 ```
 
-This builds the three images and starts the containers. On a brand-new data
-directory, the first launch produces an empty WordPress: `init.sh` downloads
-WordPress and writes `wp-config.php`, but the site itself has no title, no
-administrator and no tables yet.
+That is the whole procedure. It creates the two host directories, builds the
+three images, starts the containers, and provisions both volumes:
 
-**Complete the WordPress setup once**, by opening
-<https://kmitsuki.42.fr> in a browser and filling in the form:
+- `mariadb` creates the database and the WordPress account, replaces the
+  `unix_socket` authentication on `root` with a password, and starts `mysqld`.
+- `wordpress` downloads WordPress, writes `wp-config.php` with eight freshly
+  generated security keys, waits for the database to accept queries, then runs
+  `wp core install` and creates the second account.
 
-- Site title
-- Username — **must not contain `admin` or `Admin` in any casing**; the subject
-  forbids it and the evaluation checks it
-- Password, email
+The first run takes a few minutes: three images are built and WordPress is
+downloaded. Later starts take seconds, because both init scripts find the
+volume already provisioned and go straight to their `exec`.
 
-Then create the second account required by the subject:
-**Dashboard → Users → Add New**, role `Author` (an author can publish posts and
-leave comments; a subscriber cannot).
+When it finishes, <https://kmitsuki.42.fr> serves a configured site. **The
+WordPress setup wizard is never shown.** If it appears, the install step did not
+run, and the log says why:
 
-From that point on the state lives in `/home/kmitsuki/data`, and every later
-start reuses it. `init.sh` sees `wp-config.php` and skips its whole setup block,
-and MariaDB's `init.sh` sees `/var/lib/mysql/mysql` and skips its own.
+```bash
+docker logs wordpress | grep '^\[init\]'
+#   [init] first run: downloading wordpress
+#   [init] installing wordpress
+```
+
+On every later start the same two lines read:
+
+```
+#   [init] existing wordpress found
+#   [init] existing installation found: skipping setup
+```
+
+Both accounts come from `srcs/.env` and exist as soon as `make` returns: an
+administrator (`WP_ADMIN_USER`) and an author (`WP_USER`). The author role is
+deliberate — an author can publish posts and leave comments, which a subscriber
+cannot.
+
+The installation is guarded by `wp core is-installed`, which asks the database
+rather than the filesystem. That is what makes the step safe to re-run: a volume
+that already holds a site is never touched, so the accounts and the content
+survive a complete teardown.
+
 
 ### 3.4 Changing the domain or the login
 
