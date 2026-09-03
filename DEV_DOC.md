@@ -452,15 +452,15 @@ disagree about the port. `docker logs nginx` prints the address it tried.
 
 ## 6. Where the data lives, and why it persists
 
-| Volume                | Mounted at                                                   | Host path                       |
-| --------------------- | ------------------------------------------------------------ | ------------------------------- |
-| `srcs_mariadb_data`   | `mariadb:/var/lib/mysql`                                     | `/home/kmitsuki/data/mariadb`   |
-| `srcs_wordpress_data` | `wordpress:/var/www/html`, `nginx:/var/www/html`             | `/home/kmitsuki/data/wordpress` |
+| Volume                | Mounted at                                       | Host path                       |
+| --------------------- | ------------------------------------------------ | ------------------------------- |
+| `srcs_mariadb_data`   | `mariadb:/var/lib/mysql`                         | `/home/kmitsuki/data/mariadb`   |
+| `srcs_wordpress_data` | `wordpress:/var/www/html`, `nginx:/var/www/html` | `/home/kmitsuki/data/wordpress` |
 
 Both are **named volumes**, declared in the top-level `volumes:` section — never
 an inline host path on a service. The subject additionally requires the data to
-sit under `/home/kmitsuki/data`, expressed by handing the `local` driver a bind
-device:
+sit under `/home/kmitsuki/data`, which is expressed by handing the `local`
+driver a bind device:
 
 ```yaml
 volumes:
@@ -472,30 +472,73 @@ volumes:
       device: /home/kmitsuki/data/mariadb
 ```
 
-The object stays Docker-managed — it appears in `docker volume ls`, and
-`docker volume inspect` reports the required path — while its bytes land where
-the subject asks.
+The volume stays a Docker-managed object — it appears in `docker volume ls`, and
+`docker volume inspect srcs_mariadb_data` reports the required path — while its
+bytes land where the subject asks.
 
-Because those bytes live outside Docker's own storage area, **`docker volume rm`
-removes the volume object without touching the directory it was bound to.** A
-complete teardown (`docker rm`, `docker rmi`, `docker volume rm`,
-`docker network rm`) followed by `make` therefore brings the site back exactly
-as it was. This has been verified end to end.
+### What survives what
 
-Persistence then depends on the init scripts being **idempotent**. Each one asks
-whether the volume is already provisioned before doing anything:
+| Action                                                              | Volume objects | `/home/kmitsuki/data` | The site   |
+| ------------------------------------------------------------------- | -------------- | --------------------- | ---------- |
+| `make down`, `make re`                                              | kept           | kept                  | kept       |
+| `make clean`, `make fclean`                                         | **removed**    | kept                  | kept       |
+| `docker rm` + `docker rmi` + `docker volume rm` + `docker network rm` | **removed**    | kept                  | kept       |
+| reboot of the virtual machine                                       | kept           | kept                  | kept       |
+| `sudo rm -rf /home/kmitsuki/data/*`                                 | —              | **emptied**           | **gone**   |
+
+The third row is the one worth understanding. Because the bytes live outside
+Docker's own storage area, **`docker volume rm` removes the volume object
+without touching the directory it was bound to** — the driver only unmounts.
+Recreating the volume with the same `device:` finds the same files. That is what
+lets every container, image, volume and network be destroyed and the site come
+back unchanged.
+
+Only the last row actually loses data, and it is the one Docker cannot do on its
+own: a plain `rm` on the host filesystem.
+
+### How a container finds existing data again
+
+There are three guards, one for each thing that may already exist:
 
 ```sh
-[ ! -d "/var/lib/mysql/mysql" ]   # mariadb: is there a system database?
-[ ! -f "wp-config.php" ]          # wordpress: has the site been configured?
+[ ! -d "/var/lib/mysql/mysql" ]   # mariadb:   is there a system database?
+[ ! -f "wp-config.php" ]          # wordpress: are the files and the config there?
+wp core is-installed              # wordpress: does the database hold a site?
 ```
 
-The first boot provisions and then `exec`s the daemon. Every later boot skips
-straight to the `exec`, finds the existing data and serves it.
+The first two ask the filesystem; the third asks the database, and that
+difference matters. The two volumes are separate directories and can be in
+different states — a re-downloaded WordPress with an intact database, or an
+intact `wp-config.php` pointing at an empty one — so "are the files present" and
+"is the site installed" have to be answered independently. Asking the database
+directly is also what makes the install step safe to re-run.
 
-`restart: always` on each service means the containers come back on their own
-after a crash or after the Docker daemon restarts — which is what makes the
-stack survive a reboot of the virtual machine.
+On a first boot all three say *nothing here* and the scripts provision. On every
+later boot all three say *already done* and the scripts go straight to their
+`exec`. The init log states which path was taken:
+
+```bash
+docker logs mariadb   | grep '^\[init\]'
+docker logs wordpress | grep '^\[init\]'
+```
+
+### Across a reboot
+
+`restart: always` on each service means the Docker daemon brings the containers
+back by itself when the machine comes up; nothing has to be run by hand. Running
+`make` again after a reboot is equally safe — it rebuilds nothing that has not
+changed, and the init scripts take the *already done* path.
+
+### Starting over
+
+`/home/kmitsuki/data` is created by `make`, not by Docker, because the `local`
+driver refuses to mount a bind target that does not exist. If the directory is
+emptied while the stack is down, the next `make` provisions everything again
+from `srcs/.env`: a new database, a fresh WordPress, and the two accounts
+recreated with the names and passwords in that file. Nothing carries over from
+the previous installation, which is why `srcs/.env` — the one file that is
+deliberately not committed — is what makes the stack reproducible.
+
 
 ## 7. How each service is built
 
