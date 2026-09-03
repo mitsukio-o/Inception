@@ -38,9 +38,10 @@ make re       # down + up
 ```
 
 The very first `make` on a new machine takes a few minutes: it builds three
-images and downloads WordPress. Later starts take seconds, because the init
-scripts detect that the volumes are already provisioned and go straight to
-serving.
+images, downloads WordPress and installs it. When it returns, the site is
+already configured — there is no setup wizard to go through, and both
+accounts exist. Later starts take seconds, because the init scripts detect
+that the volumes are already provisioned and go straight to serving.
 
 ```bash
 make clean    # remove containers, volumes and images — the host data is still kept
@@ -170,7 +171,7 @@ curl -I http://kmitsuki.42.fr
 
 ```bash
 curl -sk https://kmitsuki.42.fr | grep -o '<title>[^<]*</title>'
-#   <title>Inception</title>          ← not "WordPress › Installation"
+#   <title>...</title>                    <- WP_TITLE, not "WordPress › Installation"
 ```
 
 **Only TLSv1.2 and TLSv1.3 are accepted**
@@ -252,8 +253,8 @@ docker exec -it mariadb sh -c \
 ```bash
 docker exec -it mariadb sh -c \
   'mariadb -u"$MYSQL_USER" -p "$MYSQL_DATABASE" -e "SELECT ID, user_login FROM wp_users;"'
-#   1  kmitsuki
-#   2  user2
+#   1  <WP_ADMIN_USER>
+#   2  <WP_USER>                          <- both created from srcs/.env
 ```
 
 > **What these three checks mean.** The `root` password is the
@@ -296,7 +297,9 @@ make clean && make      # containers, volumes and images destroyed and rebuilt
 | `env file .../srcs/.env not found` | the repository was just cloned | `cp srcs/.env.example srcs/.env` and fill it in |
 | `failed to mount local volume: no such file or directory` | `/home/kmitsuki/data/*` missing | `make` creates it; check the path in `srcs/docker-compose.yml` |
 | The browser cannot resolve the domain | `/etc/hosts` entry missing | `echo "127.0.0.1 kmitsuki.42.fr" \| sudo tee -a /etc/hosts` |
+| The WordPress installation wizard appears | the install step did not run | `docker logs wordpress` — the reason follows `[init] installing wordpress` |
+| The `wordpress` container keeps restarting | the install failed, usually because the database never answered | `docker logs wordpress`; check that `mariadb` is `Up` |
 | `502 Bad Gateway` | php-fpm not up yet, or not listening on 9000 | `docker logs wordpress`; check `listen = 9000` in `www.conf` |
 | Every page except the home page is `404` | `try_files` not falling back to `/index.php` | check `location /` in `nginx.conf` |
-| `Error establishing a database connection` | the password in `.env` no longer matches the one stored in the database | change it in MariaDB, or start from an empty data directory |
+| `Error establishing a database connection` | the stored credentials no longer match `srcs/.env` | change them in MariaDB, or start from an empty data directory |
 | Port 443 already in use | another web server on the host | stop it, or change the published port |
