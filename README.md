@@ -55,7 +55,7 @@ plugin and `make`.
 
 ```bash
 cp srcs/.env.example srcs/.env    # then fill in your own values
-make                              # build the images and start everything
+make                              # build the images, start, and install the site
 ```
 
 | Command      | Effect                                                    | Data |
@@ -66,9 +66,12 @@ make                              # build the images and start everything
 | `make clean` | also remove the volumes and the images                     | kept |
 | `make fclean`| same as `clean`; the host data is deliberately preserved   | kept |
 
-Then open <https://kmitsuki.42.fr>. The certificate is self-signed, so the
-browser shows a warning once — accept it. `http://kmitsuki.42.fr` is not served
-at all, because nothing listens on port 80.
+Then open <https://kmitsuki.42.fr>. The site is already configured — WordPress
+is installed during the first `make`, so the setup wizard is never shown, and
+both accounts named in `srcs/.env` already exist. The certificate is
+self-signed, so the browser shows a warning once — accept it.
+`http://kmitsuki.42.fr` is not served at all, because nothing listens on port
+80.
 
 See [USER_DOC.md](USER_DOC.md) to use and verify the stack, and
 [DEV_DOC.md](DEV_DOC.md) to set it up from scratch or work on it.
@@ -95,18 +98,26 @@ Sources included in the project:
 - `srcs/.env.example` — the committed template listing every variable.
 - `srcs/requirements/*/Dockerfile` — the three image definitions.
 - `srcs/requirements/*/conf/` — NGINX vhost, MariaDB server config, PHP-FPM pool.
-- `srcs/requirements/*/tools/init.sh` — first-boot provisioning, then `exec`.
+- `srcs/requirements/*/tools/init.sh` — first-boot provisioning, the WordPress
+  installation, then `exec`.
 
 ### Main design choices
 
 - **Debian bookworm** for all three images: the penultimate stable release, and
   the same distribution as the host, which keeps package names and paths
   predictable.
-- **Idempotent init scripts.** Each one first asks whether the volume already
-  holds state (`/var/lib/mysql/mysql`, `wp-config.php`). On the first boot it
-  provisions; on every later boot it goes straight to `exec`. This is what makes
-  persistence work, and it is why `make clean` can delete every container,
-  image and volume without losing the site.
+- **Idempotent init scripts.** Each one first asks whether the work has already
+  been done — `/var/lib/mysql/mysql` for the database, `wp-config.php` for the
+  files, and `wp core is-installed`, which asks the database rather than the
+  filesystem, for the site itself. On the first boot they provision; on every
+  later boot they go straight to `exec`. This is what makes persistence work,
+  and it is why `make clean` can delete every container, image and volume
+  without losing the site.
+- **WordPress is installed from the command line, not the browser.** `wp-cli`
+  runs `wp core install` and creates the second account from the values in
+  `srcs/.env`, so a stack brought up on an empty data directory is a configured
+  site rather than a setup wizard. The step is skipped whenever the database
+  already holds an installation.
 - **`--skip-test-db` when initialising MariaDB.** Without it,
   `mysql_install_db` creates anonymous accounts and a `test` database. The
   anonymous accounts are what would let `mariadb -u root` succeed with no
