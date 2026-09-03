@@ -605,13 +605,50 @@ needs in order to know which file to execute.
 ### wordpress
 
 ```
-Dockerfile     apt-get install php-fpm php-mysql php-gd php-mbstring php-xml
-                              php-zip curl mariadb-client ca-certificates
+Dockerfile     apt-get install php-fpm php-cli php-mysql php-gd php-mbstring
+                              php-xml php-zip curl ca-certificates mariadb-client
+               wp-cli.phar -> /usr/local/bin/wp
 conf/www.conf  listen = 9000   (not the default unix socket — see below)
 tools/init.sh  first boot only:  download WordPress, write wp-config.php,
                                  replace the 8 security keys with random values
+               once per site:    wp core install, then wp user create
                always:           bounded wait for MariaDB, then exec php-fpm8.2 -F
 ```
+
+WordPress is installed from the command line rather than through the browser,
+because the site has to be complete as soon as `make` returns — the setup wizard
+being reachable is itself a failure. `wp-cli` is a single PHP archive fetched at
+build time, so nothing joins the package set except `php-cli`, which it needs in
+order to run and which was previously present only as a transitive dependency of
+`php-fpm`.
+
+Two options on the wrapper are not decoration:
+
+```sh
+wp() {
+    php -d memory_limit=512M /usr/local/bin/wp \
+        --path=/var/www/html --allow-root "$@"
+}
+```
+
+`--allow-root` because `init.sh` runs as root — php-fpm's master starts as root
+and drops only its workers to `www-data`, so at this point there is no
+unprivileged user to become. `-d memory_limit=512M` because the pool's 128M is
+not enough for `wp core install`; giving it on the command line keeps the higher
+limit out of `www.conf`, where it would apply to every request the site ever
+serves.
+
+Both accounts are created here, from `srcs/.env`:
+
+```sh
+wp core install --url="https://${DOMAIN_NAME}" --title="${WP_TITLE}" \
+                --admin_user="${WP_ADMIN_USER}" ... --skip-email
+wp user create "${WP_USER}" "${WP_USER_EMAIL}" --role=author ...
+```
+
+`--skip-email` stops WordPress from trying to send a notification from a
+container that has no mail transport, which would otherwise delay the install.
+`author` is the lowest role that can both publish a post and leave a comment.
 
 `listen = 9000` rather than the Debian default, which is a unix socket
 (`/run/php/php8.2-fpm.sock`): NGINX is a separate container with its own network
@@ -641,7 +678,7 @@ The wait loop is bounded on purpose:
 
 ```sh
 for i in $(seq 1 60); do
-    mysqladmin ping -h ${DB_HOST} --silent && break
+    mysqladmin ping -h "${DB_HOST}" -P "${DB_PORT}" --silent && break
     sleep 2
 done
 ```
@@ -649,7 +686,11 @@ done
 `depends_on` only guarantees that the MariaDB *container* started, not that the
 daemon accepts queries. An unbounded `while` would satisfy that need too, but a
 `for` over a finite sequence can never become an infinite loop, which the
-subject explicitly prohibits in entrypoint scripts.
+subject explicitly prohibits in entrypoint scripts. If the database never
+answers, `wp core install` fails, `set -e` ends the script, and `restart: always`
+tries the whole sequence again — a container that keeps restarting is a clearer
+symptom than one serving a broken page.
+
 
 ## 8. Constraints to respect when editing
 
