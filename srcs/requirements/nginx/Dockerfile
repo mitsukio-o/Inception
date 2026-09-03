@@ -15,5 +15,8 @@ RUN mkdir -p /etc/nginx/ssl && \
       -subj "/C=JP/ST=Tokyo/L=Tokyo/O=42/OU=42/CN=kmitsuki.42.fr"
 
 COPY conf/nginx.conf /etc/nginx/nginx.conf
+# Documentation only; it is what `docker ps` reports. The port nginx really
+# binds is `listen` in conf/nginx.conf, and the right-hand side of `ports:`
+# in srcs/docker-compose.yml has to match it. Change all three together.
 EXPOSE 443
 CMD ["nginx","-g","daemon off;"]

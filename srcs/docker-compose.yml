@@ -2,17 +2,18 @@ services:
   mariadb:
     build: ./requirements/mariadb
     container_name: mariadb
+    image: mariadb:inception
     env_file: .env
     volumes:
       - mariadb_data:/var/lib/mysql
     networks:
       - inception
     restart: always
-    image: mariadb:inception
 
   wordpress:
     build: ./requirements/wordpress
     container_name: wordpress
+    image: wordpress:inception
     env_file: .env
     volumes:
       - wordpress_data:/var/www/html
@@ -20,32 +21,40 @@ services:
       - inception
     depends_on:
       - mariadb
-    image: wordpress:inception
-
-
     restart: always
 
   nginx:
     build: ./requirements/nginx
     container_name: nginx
+    image: nginx:inception
+    # The only port published to the machine, and the only way into the
+    # infrastructure. The left number is the host, the right number is the port
+    # inside the container -- `listen` in nginx/conf/nginx.conf. mariadb and
+    # wordpress publish nothing, so they are reachable only from this network.
     ports:
       - "443:443"
-
     volumes:
       - wordpress_data:/var/www/html
-
     networks:
       - inception
     depends_on:
       - wordpress
     restart: always
-    image: nginx:inception
 
 networks:
+  # A user-defined bridge. Its embedded DNS is what lets wordpress reach the
+  # database as "mariadb" and nginx reach php-fpm as "wordpress", with no IP
+  # addresses and no links:.
   inception:
     driver: bridge
 
 volumes:
+  # Named volumes, never an inline host path on a service. driver_opts hands the
+  # local driver a bind target, so each volume stays a Docker-managed object
+  # that docker volume ls and docker volume inspect report, while its bytes land
+  # under /home/kmitsuki/data as the subject requires. Because those bytes sit
+  # outside Docker's own storage area, docker volume rm removes the object
+  # without touching the directory it was bound to.
   mariadb_data:
     driver: local
     driver_opts:

@@ -24,7 +24,16 @@ basedir                 = /usr
 
 # Instead of skip-networking the default is now to listen only on
 # localhost which is more compatible and is not less secure.
+# 0.0.0.0 is required because WordPress connects from another container,
+# which is another address on the bridge network. The container has a single
+# interface on a private network and publishes no port, so the boundary is
+# the network namespace, not this line.
 bind-address            = 0.0.0.0
+
+# The port mysqld listens on. It must be kept in step with DB_PORT in
+# srcs/.env, which is what wp-config.php and the wait loop in
+# wordpress/tools/init.sh use, and with EXPOSE in this service's Dockerfile.
+port                    = 3306
 
 #
 # * Fine Tuning
