@@ -178,25 +178,38 @@ survive a complete teardown.
 
 ### 3.4 Changing the domain or the login
 
-The domain is baked in at build time, so it appears in two files:
+The domain appears in three places. Two are baked into the image at build time;
+the third is written into the database by the installer.
 
 1. `srcs/requirements/nginx/conf/nginx.conf` — `server_name`
 2. `srcs/requirements/nginx/Dockerfile` — the `CN=` of the self-signed certificate
+3. `srcs/.env` — `DOMAIN_NAME`, which `wp core install` stores in `wp_options`
 
 plus the `/etc/hosts` entry on the machine running the browser.
 
 The login appears in the data paths, in two more files:
 
-3. `Makefile` — the `mkdir -p /home/<login>/data/...` line
-4. `srcs/docker-compose.yml` — the two `device:` paths
+4. `Makefile` — the `mkdir -p /home/<login>/data/...` line
+5. `srcs/docker-compose.yml` — the two `device:` paths
 
-After changing the domain, the site URL stored in the database must be updated
-too, or the browser will be redirected to the old one:
+`DOMAIN_NAME` is read only while the site is being installed, so on a stack that
+already holds data the stored address has to be changed by hand as well —
+otherwise every request is redirected back to the old one:
+
+```bash
+docker exec wordpress wp --path=/var/www/html --allow-root \
+  option update home "https://new.domain"
+docker exec wordpress wp --path=/var/www/html --allow-root \
+  option update siteurl "https://new.domain"
+```
+
+The same two rows, in SQL:
 
 ```bash
 docker exec -it mariadb mariadb -u<MYSQL_USER> -p <MYSQL_DATABASE> \
   -e "UPDATE wp_options SET option_value='https://new.domain' WHERE option_name IN ('siteurl','home');"
 ```
+
 
 ### 3.5 Changing a port
 
@@ -248,39 +261,29 @@ names the side that was not updated.
 This port is internal to the bridge network and is never published, so nothing
 outside the stack is affected by the change.
 
-**The database port.** This is the only one that also reaches a file stored on a
-volume, so a rebuild alone is not enough.
+**The database port.** The server side and the client side, plus `EXPOSE` for
+consistency.
 
-| File                                              | Change                             |
-| -------------------------------------------------- | ---------------------------------- |
-| `srcs/requirements/mariadb/conf/50-server.cnf`    | `port = 3307` under `[mysqld]`     |
-| `srcs/.env`                                       | `DB_PORT=3307`                     |
-| `srcs/requirements/wordpress/tools/init.sh`       | see below                          |
-| `srcs/requirements/mariadb/Dockerfile`            | `EXPOSE 3307`                      |
+| File                                           | Change                         |
+| ---------------------------------------------- | ------------------------------ |
+| `srcs/requirements/mariadb/conf/50-server.cnf` | `port = 3307`                  |
+| `srcs/.env`                                    | `DB_PORT=3307`                 |
+| `srcs/requirements/mariadb/Dockerfile`         | `EXPOSE 3307`                  |
 
-`DB_HOST` is used in two different ways, and they do not accept the same syntax:
+`DB_PORT` is the only place the client side is written. `wp-config.php` receives
+it as `DB_HOST:DB_PORT`, a form WordPress accepts, and the wait loop passes it to
+`mysqladmin` as `-P` — separately, because `mysqladmin` reads `-h` as a host name
+and does not parse `host:port`. Neither init script needs editing.
 
-```sh
-sed -i "s/localhost/${DB_HOST}/" wp-config.php        # WordPress: accepts host:port
-mysqladmin ping -h ${DB_HOST} --silent                # mysqladmin: -h is a host only
-```
+Changing only the server side still lets the stack come up, which is what makes
+the mistake confusing: `mysqladmin` never answers, the loop runs its full 60
+iterations, and about two minutes later php-fpm starts and serves
+`Error establishing a database connection`. A slow start followed by that page
+is the signature.
 
-So the port cannot simply be appended to `DB_HOST`. Add a separate `DB_PORT` and
-use it on both lines:
-
-```sh
-sed -i "s/localhost/${DB_HOST}:${DB_PORT}/" wp-config.php
-mysqladmin ping -h "${DB_HOST}" -P "${DB_PORT}" --silent
-```
-
-If only the server side is changed, the stack still comes up — `mysqladmin`
-fails, the loop runs its full 60 iterations, and php-fpm starts about two
-minutes later serving `Error establishing a database connection`. A slow start
-followed by that page is the signature of a half-finished port change.
-
-There is one more catch. `init.sh` writes `wp-config.php` only when the file does
-not exist, so on a volume that already holds a site the new value is never
-written. Either edit the existing file in place:
+One thing a rebuild cannot reach is `wp-config.php`: it lives on the volume and
+is written only when absent, so a site that already exists keeps the old value.
+Either update it in place —
 
 ```bash
 docker exec wordpress sed -i \
@@ -288,11 +291,15 @@ docker exec wordpress sed -i \
 docker restart wordpress
 ```
 
-or start from an empty data directory, which destroys the site:
+— or start from an empty data directory, which destroys the site:
 
 ```bash
 make clean && sudo rm -rf /home/kmitsuki/data/* && make
 ```
+
+This port is internal to the bridge network and is never published, so nothing
+outside the stack is affected by the change.
+
 
 **Picking a number.** Anything from 1024 to 65535 that is free on the machine
 works; `sudo ss -tlnp` lists what is already taken. Three numbers are special:
