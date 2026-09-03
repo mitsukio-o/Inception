@@ -698,7 +698,8 @@ symptom than one serving a broken page.
   script ends with `exec`, so `docker stop` delivers `SIGTERM` to the daemon
   itself instead of being killed after the grace period.
 - **No process kept alive artificially.** `tail -f`, `sleep infinity`,
-  `while true`, `nginx & bash` are grounds for immediate failure at evaluation.
+  `while true` and `nginx & bash` all defeat the point of the exercise; the only
+  loop in the project is a `for` over a finite sequence.
 - **No `network_mode: host`, no `links:`.** Services find each other by
   container name through the embedded DNS of the user-defined bridge network.
 - **Only `nginx` publishes a port**, and only `443`.
@@ -707,16 +708,25 @@ symptom than one serving a broken page.
   in `.gitignore`.
 - **`mysql_install_db` keeps `--skip-test-db`**, and the database host variable
   keeps the name `DB_HOST`. Undoing either re-opens password-less `root` login.
+- **The site stays installable without a browser.** Starting from an empty
+  `/home/kmitsuki/data`, `make` alone has to produce a configured site; if the
+  WordPress setup wizard is reachable afterwards, the install step did not run.
+- **`wp core install` stays behind `wp core is-installed`.** Without that guard
+  every restart would try to reinstall over an existing database.
+- **`WP_ADMIN_USER` must not contain `admin`** in any casing.
 
 ## 9. Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `env file .../srcs/.env not found` | fresh clone | `cp srcs/.env.example srcs/.env` |
-| `failed to mount local volume` | data directory missing | `make` creates it; check the path in `docker-compose.yml` |
-| WordPress shows the installation wizard | the data directory is empty | complete the setup once (§3.3) |
-| `502 Bad Gateway` | php-fpm down, or `listen` is a socket / `127.0.0.1` | `docker logs wordpress`; check `www.conf` |
-| Every page but the home page is `404` | `try_files` missing the `/index.php` fallback | check `location /` in `nginx.conf` |
+| `env file .../srcs/.env not found` | fresh clone | `cp srcs/.env.example srcs/.env` and fill it in |
+| `failed to mount local volume` | data directory missing | `make` creates it; check the paths in `docker-compose.yml` |
+| WordPress shows the installation wizard | `wp core install` did not run or failed | `docker logs wordpress`; the reason is on the line after `[init] installing wordpress` |
+| the `wordpress` container restarts in a loop | the install failed, usually because the database never answered | `docker logs wordpress`; check that `mariadb` is up and that `DB_PORT` matches `port` in `50-server.cnf` |
+| `502 Bad Gateway` | php-fpm down, or `listen` and `fastcgi_pass` disagree | `docker logs wordpress` and `docker logs nginx`; the nginx log names the address it tried |
+| every page but the home page is `404` | `try_files` missing the `/index.php` fallback | check `location /` in `nginx.conf` |
+| the browser is redirected to a different domain | `DOMAIN_NAME` was changed after the site was installed | update `home` and `siteurl` as in §3.4 |
+| a password from `srcs/.env` is rejected | credentials are read while provisioning, not at every start | change it in WordPress or MariaDB, or reprovision from an empty data directory |
 | `mariadb -uroot` logs in with no password | `--skip-test-db` removed, or the host variable renamed to `MYSQL_HOST` | restore both, then reprovision from an empty data directory |
-| `Error establishing a database connection` | `.env` password no longer matches the stored one | change it in MariaDB, or reprovision |
+| `Error establishing a database connection` | the stored credentials no longer match `srcs/.env`, or the database port moved | see §3.5 for the port case |
 | `permission denied ... docker.sock` | not in the `docker` group yet | log out and back in |
