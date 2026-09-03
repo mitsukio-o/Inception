@@ -70,12 +70,16 @@ If the browser cannot resolve `kmitsuki.42.fr`, the machine is missing its
 echo "127.0.0.1 kmitsuki.42.fr" | sudo tee -a /etc/hosts
 ```
 
-Two WordPress accounts exist:
+Two WordPress accounts are created while the stack is being provisioned, from
+the values in `srcs/.env`:
 
-| Account    | Role          | Can do                                              |
-| ---------- | ------------- | --------------------------------------------------- |
-| `kmitsuki` | administrator | everything: pages, themes, plugins, users, settings |
-| `user2`    | author        | write and publish their own posts, leave comments   |
+| Account         | From              | Role          | Can do                                              |
+| --------------- | ----------------- | ------------- | --------------------------------------------------- |
+| `WP_ADMIN_USER` | `srcs/.env`       | administrator | everything: pages, themes, plugins, users, settings |
+| `WP_USER`       | `srcs/.env`       | author        | write and publish their own posts, leave comments   |
+
+Neither has to be created by hand, and the WordPress setup wizard is never
+shown — the site is already configured when `make` returns.
 
 ## 4. Where the credentials are
 
@@ -87,20 +91,34 @@ the stack.
 cat srcs/.env
 ```
 
-| Variable              | Used for                                        |
-| --------------------- | ----------------------------------------------- |
-| `MYSQL_ROOT_PASSWORD` | the MariaDB `root` account                      |
-| `MYSQL_PASSWORD`      | the MariaDB account WordPress connects with     |
-| `MYSQL_USER`          | the name of that account                        |
-| `MYSQL_DATABASE`      | the database WordPress uses                     |
-| `DB_HOST`             | hostname of the database container (`mariadb`)  |
+| Variable              | Used for                                          |
+| --------------------- | ------------------------------------------------- |
+| `MYSQL_ROOT_PASSWORD` | the MariaDB `root` account                        |
+| `MYSQL_USER`          | the name of the account WordPress connects with   |
+| `MYSQL_PASSWORD`      | that account's password                           |
+| `MYSQL_DATABASE`      | the database WordPress uses                       |
+| `DB_HOST`             | hostname of the database container (`mariadb`)    |
+| `DB_PORT`             | the port MariaDB listens on                       |
+| `DOMAIN_NAME`         | the address the site is installed at              |
+| `WP_TITLE`            | the site title                                    |
+| `WP_ADMIN_USER`       | the WordPress administrator, and its              |
+| `WP_ADMIN_PASSWORD`   | password and                                      |
+| `WP_ADMIN_EMAIL`      | email address                                     |
+| `WP_USER`             | the second WordPress account, and its             |
+| `WP_USER_PASSWORD`    | password and                                      |
+| `WP_USER_EMAIL`       | email address                                     |
 
-The WordPress account passwords are not in `.env`; they were set during the
-WordPress setup and are stored, hashed, in the database. Reset one with:
+> **These values are read once, while a volume is being provisioned.** They are
+> not re-applied on every start. Editing a password in `srcs/.env` on a stack
+> that already has data changes nothing: the database and WordPress keep the
+> credentials they were created with. Change them in WordPress or in MariaDB
+> instead, or start again from an empty data directory.
+
+Reset a forgotten WordPress password from the host:
 
 ```bash
-docker exec -it mariadb mariadb -uroot -p wordpress \
-  -e "UPDATE wp_users SET user_pass = MD5('newpassword') WHERE user_login='kmitsuki';"
+docker exec wordpress wp --path=/var/www/html --allow-root \
+  user update <username> --user_pass='new-password'
 ```
 
 If `srcs/.env` does not exist — for instance on a freshly cloned repository —
@@ -111,6 +129,9 @@ cp srcs/.env.example srcs/.env
 $EDITOR srcs/.env
 ```
 
+> **The administrator name must not contain `admin`** in any casing.
+> `administrator`, `Admin-kmitsuki` and `admin123` are all rejected.
+
 > **Passwords must not contain `/`, `&`, `\` or `'`.** The values are
 > substituted into `wp-config.php` and into the SQL that creates the database
 > user, so those four characters would break the generated files. Every other
@@ -118,9 +139,6 @@ $EDITOR srcs/.env
 > is fine. This is a documented constraint of the configuration file, not of
 > WordPress itself.
 
-Changing a password in `.env` only has an effect the first time a volume is
-provisioned. On a stack that already has data, change it in MariaDB or in
-WordPress directly.
 
 ## 5. Checking that everything works
 
